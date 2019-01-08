@@ -1,11 +1,13 @@
 #!/bin/sh +x
 # Create Date: Wed 19 Dec 2018 02:21:37 PM CST
-# Last updated: Fri 04 Jan 2019 02:30:02 PM CST
+# Last updated: Sat 05 Jan 2019 09:05:57 PM CST
 # Author: David Washington (although this is such a hack job I don't want my name tied to it!)
 #
 # Purpose:  I am too lazy to keep typing commands to install ICP and ICAM.  So I created
 # this hack job to avoid typing the commands.
 
+# Sat 05 Jan 2019 09:35:51 PM CST
+# Added check_uid() in order to confirm the script is run as the root user
 check_uid () {
     if [[ $(whoami) != "root" ]] ; then
             echo "You must run this script as root. Goodbye."
@@ -251,7 +253,12 @@ install_icp() {
     echo -e "\n"
 
     tar vxf $installPPA -O | docker load
-    icpDir=`ls -ltr | grep --color=NEVER ibm-cloud*gz | cut -d" " -f9 | awk -F"x86_64." '{print "ibm-cloud-private-"$2}' | awk -F".tar.gz" '{print $1}'`
+
+    # Mon 07 Jan 2019 07:24:17 PM CST: Changed ls command to stat command due to the ls command not correctly creating the install dir for ICP 3.1.1
+    #icpDir=`ls -ltr | grep --color=NEVER ibm-cloud*gz | cut -d" " -f9 | awk -F"x86_64." '{print "ibm-cloud-private-"$2}' | awk -F".tar.gz" '{print $1}'`
+    icpDir=`stat -c %n ibm-cloud-private-*.tar.gz | awk -F"x86_64." '{print "ibm-cloud-private-"$2}' | awk -F".tar.gz" '{print $1}'`
+
+    echo "DEBUG: stat command resulted in ---> ${icpDir}"
 
     #Comment out the step to hard code the /opt/ibm-cloud-private* directory
     #Mon 24 Dec 2018 02:05:05 AM CST
