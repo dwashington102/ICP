@@ -1,30 +1,110 @@
 #!/bin/sh +x
 # Create Date: Wed 19 Dec 2018 02:21:37 PM CST
-# Last updated: Sat 05 Jan 2019 09:05:57 PM CST
+# Last updated: Mon 07 Jan 2019 07:24:17 PM CST: Changed icp_install() replacing the  ls command to stat command due to the ls command not correctly parsing the tar.gz file and failing to create the expected install directory for ICP 3.1.1.
 # Author: David Washington (although this is such a hack job I don't want my name tied to it!)
 #
 # Purpose:  I am too lazy to keep typing commands to install ICP and ICAM.  So I created
 # this hack job to avoid typing the commands.
 
+# Fri 04 Jan 2019 02:28:32 PM CST
+# Added check_hostname() in order to detect case of hostname.  Seems Calico has an issue when hostname is all UPPER CASE
+
 # Sat 05 Jan 2019 09:35:51 PM CST
 # Added check_uid() in order to confirm the script is run as the root user
+
+# Tue 15 Jan 2019 06:50:34 PM CST
+# Added do_preqcheck() and check_cpu() to confirm the number of cpus is >= 4
+#
+####################################################################################################
+
+# Color variables are used to draw attention to important settings and steps when the script runs.
+# RED indicates a  failure condition was encountered
+RED='\033[0;31m'
+
+# GREEN indicates no failure conditions were encountered 
+GREEN='\033[0;32m'
+
+# NC changes the text color back to Normal Color
+NC='\033[0m'
+
+
+# Work in progress.  Need to check the number of cpus @ worker node before beginning the CAM install.
+get_wkrcpu(){
+    printf "${GREEN}Confirm the number of CPUs at the Worker Node...\n${NC}"
+    wCPU=`ssh root@${workerIP} 'grep ^proc /proc/cpuinfo | wc -l'`
+    if [ ${wCPU} -lt 8 ]; then
+        printf "${RED}\n" 
+        printf  "${RED}Total Number of CPUs (${wCPU}) will not allow IBM Cloud App Management to correctly install."
+        printf "${NC}\n" 
+        exit 12
+    else
+        printf "${GREEN}\n" 
+        echo "Number of CPUs at the Worker Node is sufficent to install Cloud App Management."
+        printf "${NC}\n" 
+    fi
+}
+
+do_preqcheck () {
+	check_uid
+	check_files
+	check_cpu
+	get_ulimit
+
+}
+
+check_files () {
+	filecnt=`stat -c "%n" app_mgmt_server_*tar.gz ibm-cloud-*tar.gz icp-docker*bin | wc -l`
+
+	if [ $filecnt -ne 3 ]; then
+            printf "${RED}"
+	    echo "Compressed product files not found in the current directory."
+	    echo "Place all 3 compressed product files in the /opt/install_media directory and run the script again."
+	    printf "${NC}"
+	    exit 6
+	else
+          printf "${GREEN} Compressed product files found in current directory.${NC}\n" 
+          echo "Checking system hardware, ulimit settings, and virtual memory..."
+	fi
+}
+
+check_cpu() {
+	cputot=`cat /proc/cpuinfo | grep ^proc | wc -l`
+	if [ ${cputot} -lt 8 ] ; then
+		printf "${RED}\n"
+		echo "Total Number of CPUs (${cputot}) will not allow IBM Cloud Private to correctly install"
+		echo "Increase the number of CPUs to 8 or more."
+		printf "${NC}\n"
+		exit 2
+	else
+		printf "${GREEN}\n"
+		echo "Number of CPUs at the Master Node is sufficient for install to continue."
+		printf "${NC}\n"
+	fi
+}
+
 check_uid () {
     if [[ $(whoami) != "root" ]] ; then
             echo "You must run this script as root. Goodbye."
             echo
             exit 1
-        fi
+     else 
+          echo -e "\n"
+          echo "Confirming the compressed product files are in the current directory..."
+     fi
 }
 
 install_docker () {
     /opt/install_media/icp-docker*bin --install
+    #printf "${RED}DEBUG -----> $?\n"
     if [ $? != 0 ]; then
+        printf "${RED}\n"
         echo "Docker Failed to install"
         echo "Aborting installation of ICP.  Review /var/log/icp_docker.log to determine why docker failed to install"
+        printf "${NC}\n"
         echo -e "\n"
-	exit
+	exit 5
     else
-        echo "Docker successfully installed at the Master Node"
+        printf  "${GREEN}Docker successfully installed at the Master Node${NC}"
         echo -e "\n"
     fi
 }
@@ -77,52 +157,69 @@ get_ulimit() {
     uNofile=`ulimit -n`
     uCore=`ulimit -c`
 
-    printf "===================\nIf ulimit nofile setting is less than 32768 \nand/or core file is not set to \"unlimited\"-->\n"
     echo -e "\n"
-
-    echo "Update the /etc/security/limits.conf file adding these lines:"
-    echo "root soft nofile 32768"
-    echo "root hard nofile 65536"
-    echo "root hard core unlimited"
-    echo "root soft core unlimited"
-    echo -e "\n"
-    echo "The root userid must log out and then login again for the ulimit settings to detect the changes made to the limits.conf file."
-
-    echo -e "\n"
-    echo "Current System Settings:"
+    echo "=======================Current Ulimit System Settings:"
     if [ \( ${uNofile} -lt 32768 \) -o \( ${uCore} != "unlimited" \) ]; then
         printf  "${RED}Ulimit Nofile - ${uNofile}\n"
         printf "Ulimit CORE - ${uCore}${NC}\n"
         echo "======================="
         echo -e "\n"
+        printf "===================\nIf ulimit nofile setting is less than 32768 \nand/or core file is not set to \"unlimited\"-->\n"
+        echo -e "\n"
+
+        echo "Update the /etc/security/limits.conf file adding these lines:"
+        echo "root soft nofile 32768"
+        echo "root hard nofile 65536"
+        echo "root hard core unlimited"
+        echo "root soft core unlimited"
+        echo -e "\n"
+	echo "Modify the settings in the /etc/security/limits.conf and then run the script again"
+        echo "The root userid must log out and then login again for the ulimit settings to detect the changes made to the limits.conf file."
+        echo -e "\n"
+
+        echo "Before proceeding confirm if the above current systems values meet the requirements"
+        printf "If any values above appear as ${RED}RED${NC} text ---- IBM Cloud Private and/or IBM Cloud App. Mgmt  will not fully install\n"
+        echo -e "\n"
+	exit 3
     else
         printf  "${GREEN}Ulimit Nofile - ${uNofile}\n"
         printf "Ulimit CORE - ${uCore}${NC}\n"
         echo "======================="
+        echo -e "\n"
     fi
-  
-    printf "=====================\nVirtual Memory Settings\n"
-    echo "If vm.max_map_count < 262144 increase the value using the command: sysctl -w vm.max_map_count=262144"
-    echo -e "\n"
-
-    echo "Current System Settings:"
+      
+    echo "=====================Current Virtual Memory Settings:"
     if [ ${vmmax} -lt 262144 ]; then
         printf "${RED}Current vm.max_map_count is ${vmmax}${NC}\n"
         echo "======================="
+	echo "Modify the vm.max_map_count setting and then run the script again"
+        echo "If vm.max_map_count < 262144 increase the value using the command: sysctl -w vm.max_map_count=262144"
         echo -e "\n"
+
+        echo "Before proceeding confirm if the above current systems values meet the requirements"
+        printf "If any values above appear as ${RED}RED${NC} text ---- IBM Cloud Private and/or IBM Cloud App. Mgmt  will not fully install\n"
+        echo -e "\n"
+	exit 4
     else
         printf "${GREEN}Current vm.max_map_count is ${vmmax}${NC}\n"
         echo "======================="
         echo -e "\n"
     fi
     
-    echo "=====================Physical Memory"
-    echo "Total Physical Memory  at the Master Node should be at least 32 GB"
-    free -h | grep --color=NEVER -v -i swap
-    echo "=====================Virtual Memory Settings"
-    echo -e "\n"
-
-    printf "\t\t${RED}********STOP*************${NC}\n"
+    echo "=====================Current Physical Memory:"
+    memtotal=`cat /proc/meminfo | grep ^MemT | awk -F" " '{print $2}'`
+    if [ ${memtotal} -lt 30000000 ] ; then
+        printf "${RED}\n"
+        echo "Total Physical Memory  at the Master Node should be at least 32 GB"
+        free -h | grep --color=NEVER -v -i swap
+        printf "${NC}\n"
+        printf "\t\t${RED}********STOP*************${NC}\n"
+    else
+	printf "${GREEN}\n"
+	echo "Total Memory:"
+        free -h | grep --color=NEVER -v -i swap
+        printf "${NC}\n"
+    fi
     echo -e "\n"
 
     echo "Before proceeding confirm if the above current systems values meet the requirements"
@@ -148,7 +245,7 @@ ssh root@$workerIP 'ls > /dev/null'
 if [ $? != 0 ]; then
     echo "Sharing SSH Keys is not ENABLED Exiting..."
     echo -e "\n"
-    exit 
+    exit 9
 else
     mediaDir='/opt/install_media'
     echo "Starting Worker Node actions..."
@@ -159,18 +256,26 @@ else
     ssh root@$workerIP 'yum update -y'
     rpm -qa | grep --color=NEVER -m1 -E "^socat.*x86_64"
     if [ $? != 0 ]; then
-        echo "Installing required socat package"
-        socatPkg=`yum whatprovides socat | grep --color=NEVER ^soca | awk -F" : " '{print $1}'` 
+        echo "Installing required socat package at the Worker Node"
+        socatPkg=`yum whatprovides socat | grep --color=NEVER ^soca | cut -d":" -f1 | sort -ur | grep --color=NEVER -m1 socat` 
         yum install -y $socatPkg
-        ssh root@$workerIP '/opt/install_media/k8s_pv_create.sh'
+        if [ $? != 0 ]; then
+	    printf "${RED} Unable to install required socat package on worker node.\n  Installation of IBM Cloud Private not possible without socat package installed at the Master and Worker nodes.\n"
+            printf "Confirm Worker and Master Nodes are correctly registred by running the /root/ibm-rhsm.sh script.${NC}\n"
+            exit 11
+        else     
+	    printf "${GREEN} SOCAT package installed at Worker Node.${NC}\n"
+        fi
+    ssh root@$workerIP '/opt/install_media/k8s_pv_create.sh'
         # Next step installs IBM docker at the Worker node maybe optional since the ICP 3.1.0 install should take care of installing docker at the work, but I do it anyway
-        ssh root@$workerIP '/opt/install_media/icp*docker*bin --install'
-        echo "Completed Worker Node Actions"
+    ssh root@$workerIP '/opt/install_media/icp*docker*bin --install'
+    echo "Completed Worker Node Actions"
     else
+        printf "${GREEN}socat package already installed at Worker Node${NC}\n"
         ssh root@$workerIP '/opt/install_media/k8s_pv_create.sh'
         # Next step installs IBM docker at the Worker node maybe optional since the ICP 3.1.0 install should take care of installing docker at the work, but I do it anyway
         ssh root@$workerIP '/opt/install_media/icp*docker*bin --install'
-        echo "Completed Worker Node Actions"
+        printf "${GREEN}Completed Worker Node Actions${NC}\n"
     fi
 fi
 }
@@ -198,15 +303,13 @@ printf "${GREEN}Enter the password for the root user at the worker node: $worker
 ssh-copy-id -i ~/.ssh/id_rsa.pub root@$workerIP
 if [ $? != 0 ]; then
     printf "${RED}Invalid password for the root user at $workerIP${NC}\n"
-    exit 
+    exit 8 
 else
     check_hostname
     sleep 10
 fi
 }
 
-# Fri 04 Jan 2019 02:28:32 PM CST
-# Added check_hostname() in order to detect case of hostname.  Seems Calico has an issue when hostname is all UPPER CASE
 check_hostname () {
     echo -e "\n"
     printf "\t${RED}**************STOP*******************${NC}\n"
@@ -223,7 +326,7 @@ check_hostname () {
     if [ $myAnswer == "n" ]; then 
     	echo "Change the hostname(s) to user all lower case letters and then start the install script."
         echo -e "\n"
-	exit 
+	exit 7
     else
         echo -e "\n"
         echo "No other user input is required. The installer will be begin shortly. "
@@ -254,11 +357,10 @@ install_icp() {
 
     tar vxf $installPPA -O | docker load
 
-    # Mon 07 Jan 2019 07:24:17 PM CST: Changed ls command to stat command due to the ls command not correctly creating the install dir for ICP 3.1.1
     #icpDir=`ls -ltr | grep --color=NEVER ibm-cloud*gz | cut -d" " -f9 | awk -F"x86_64." '{print "ibm-cloud-private-"$2}' | awk -F".tar.gz" '{print $1}'`
     icpDir=`stat -c %n ibm-cloud-private-*.tar.gz | awk -F"x86_64." '{print "ibm-cloud-private-"$2}' | awk -F".tar.gz" '{print $1}'`
 
-    echo "DEBUG: stat command resulted in ---> ${icpDir}"
+    #echo "DEBUG: stat command resulted in ---> ${icpDir}"
 
     #Comment out the step to hard code the /opt/ibm-cloud-private* directory
     #Mon 24 Dec 2018 02:05:05 AM CST
@@ -322,6 +424,7 @@ get_installMedia () {
  
 install_cam () {
     echo "Begin ICAM deployment..."
+    get_wkrcpu
     cd /opt/install_media/icam
     echo -e "\n"
     sleep 10
@@ -343,7 +446,7 @@ install_cam () {
     cd ibm-cloud-appmgmt-prod
     sleep 10
 
-    ./additionalFiles/prepare-pv.sh --size0 --releaseName ibmcloudappmgmt --cassandraNode $masterIP --mongoDBNode $workerIP --kafkaNode $masterIP --zookeeperNode $workerIP --couchdbNode $workerIP --datalayerNode $workerIP
+    ./additionalFiles/prepare-pv.sh --size0 --releaseName ibmcloudappmgmt --cassandraNode $masterIP --mongoDBNode $workerIP --kafkaNode $masterIP --zookeeperNode $masterIP --couchdbNode $workerIP --datalayerNode $workerIP
 
     kubectl create -f ./additionalFiles/../yaml/
 
@@ -362,8 +465,7 @@ install_cam () {
 }
 
 MAIN () {
-check_uid
-get_ulimit	
+do_preqcheck
 install_icp
 install_cam
 get_downpods
